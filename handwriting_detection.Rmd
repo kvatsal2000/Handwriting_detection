@@ -1,0 +1,648 @@
+---
+title: "ETC3250/5250 IML Asignment 3 Solution"
+author: Kumar Vatsal (32877692)
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: show
+---
+
+
+```{r, message = FALSE, echo = -1 , warning=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+
+
+library(tidyverse)
+library(rpart)
+library(kknn)
+library(rsample)
+library(ranger)
+library(xgboost)
+library(yardstick)
+
+```
+
+
+```{r}
+set.seed(32877692)
+```
+
+
+## Preliminary analysis
+
+
+```{r message = FALSE,warning=FALSE}
+data <- read_csv(here::here("data32877692.csv"))
+
+
+data_new <- read_csv(here::here("newrecords32877692.csv"))
+
+
+
+```
+
+
+
+### Question 1 What is the letter in your data?
+
+
+
+```{r}
+imagedata_to_plotdata <- function(data = data, 
+                                  w = 28, 
+                                  h = 28, 
+                                  which = sample(1:3414,12))
+  
+  {
+   data %>% 
+    mutate(id = 1:n()) %>% 
+    filter(id %in% which) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+gfaces <- imagedata_to_plotdata(data) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+gfaces
+
+```
+
+The letter in my data is **C**
+
+
+### Question 2 Plot a random sample of 12 images, like below, of your data with the correct orientation.
+
+```{r}
+imagedata_to_plotdata <- function(data = data, 
+                                  w = 28, 
+                                  h = 28, 
+                                  which = sample(1:3414,12))
+  
+  {
+   data %>% 
+    mutate(id = 1:n()) %>% 
+    filter(id %in% which) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+gfaces2 <- imagedata_to_plotdata(data) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    facet_wrap(~id) +
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+gfaces2
+
+```
+
+### Question 3 Perform a principal component analysis (PCA) on your data. How much variation does the first 5 principal components explain in the data?
+
+```{r}
+
+data_pca <- prcomp(data)
+a <- (data_pca$sdev^2 / sum(data_pca$sdev^2)) %>% head(5)
+a
+```
+
+
+- Variation explained by PC1 = 16.28%
+- Variation explained by PC2 = 13.73%
+- Variation explained by PC3 = 9.89%
+- Variation explained by PC4 = 6.56%
+- Variation explained by PC5 = 5.04%
+
+
+```{r}
+cumsum(data_pca$sdev^2 / sum(data_pca$sdev^2)) %>% head(5)
+```
+
+
+Cumulative variation explained by first 5 PCs = 51.51%
+
+
+INCLUDE YOUR ANSWER HERE
+
+### Question 4 Show what aspect of the data the first and second principal component loadings capture like the example plot below.
+
+```{r}
+
+pc_decompose <- function(k) {
+  Xnew <- data_pca$x[, k, drop = FALSE] %*% t(data_pca$rotation[, k, drop = FALSE])
+
+  as.data.frame(Xnew) %>% 
+    imagedata_to_plotdata()
+}
+
+
+gfaces %+% pc_decompose(1) + labs(title = "PC 1")
+
+gfaces %+% pc_decompose(2) + labs(title = "PC 2")
+
+
+
+
+```
+
+The first principle component explains a c which is lower case and has a longer 
+bottom part as compared to the top part, its also rotated in anticlockwise direction
+slightly.
+
+The second principle component shows a c which has a longer top part with the top part
+coming down. 
+
+
+
+### Question 5 Using the rotated data from the PCA, perform an agglomerative hierarchical clustering with average linkage.
+
+```{r}
+h_avg <- hclust(dist(data_pca$x), method = "average")
+```
+
+### Question 6 Cut the tree from question 5 to 4 clusters. Show how many observations you have per cluster.
+
+```{r}
+
+cut_avg <- cutree(h_avg, k = 4)
+table(cut_avg)
+```
+
+
+### Question 7 Show a sample of 10 (or the total number of images in a cluster if less than 10 observations in a cluster) images from each cluster like the plot below. What do you notice about the cluster groups?
+
+```{r}
+
+data2 <- cbind(data,cut_avg)  # combining the data with cluster vector.
+
+
+abc <- data2 %>%              # sampling the data for random samples from each cluster.
+  group_by(cut_avg) %>% 
+  slice_sample(n = 10) %>%
+  ungroup()
+
+
+imagedata_to_plotdata_4 <- function(data = abc, 
+                                  w = 28, 
+                                  h = 28)
+{
+   data %>% 
+    mutate(id = 1:n()) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+qwerty <- list(1,2,3,4)
+
+plot_list <- list()
+
+
+for(i in qwerty){
+  plotsabc <- imagedata_to_plotdata_4(abc) %>% 
+  filter(cut_avg == i) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    facet_wrap(~id , nrow = 10 ) +
+    scale_y_reverse() +
+    theme_void(base_size = 5) +
+    theme(strip.text.x = element_blank()) +
+    guides(fill = "none") +
+    coord_equal() +
+  ggtitle(paste("Cluster",i))
+  plot_list[[i]] <- plotsabc
+}
+
+
+grid_plot <- gridExtra::grid.arrange(grobs = plot_list, ncol = 4)
+
+
+print(grid_plot)
+
+
+
+```
+
+
+- For cluster 1, we can see that Most of C's that are captured are lower case and are thick in the middle.
+ 
+- For cluster 2, the C's captured are tilted towards the top left corner.
+
+- For cluster 3, the C's captured are tilted toward the top right corner.
+
+- For cluster 4, only one C is captured which appears to be upper case.
+
+
+
+## Report
+
+
+```{r, class.source = 'fold-hide'}
+
+set.seed(2000)
+kout <- kmeans(data_pca$x, centers = 3)
+table(kout$cluster)
+```
+For the clustering method I have used *kmeans*. It is considered one of the best
+methods. On testing other methods as well, Kmeans comes out as the best as it gives 
+the most sensible clusters with centers = 3. 
+From the above output, we can see that that k means has almost clusterd equal 
+number of observations in each cluster which is a good sign.
+
+
+
+```{r, class.source = 'fold-hide'}
+
+set.seed(32877692)
+
+cluster_number <- factor(kout$cluster)
+data3 <- cbind(data,cluster_number)  # combining the data with cluster vector.
+
+abc2 <- data3 %>%              # sampling the data for random samples from each cluster.
+  group_by(cluster_number) %>% 
+  slice_sample(n = 40) %>%
+  ungroup()
+
+imagedata_to_plotdata_5 <- function(data = abc2, 
+                                  w = 28, 
+                                  h = 28)
+{
+   data %>% 
+    mutate(id = 1:n()) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+
+qwerty2 <- list(1,2,3)
+
+plot_list2 <- list()
+
+
+for(i in qwerty2){
+  plotsabc2 <- imagedata_to_plotdata_4(abc2) %>% 
+  filter(cluster_number == i) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    facet_wrap(~id , nrow = 10 ) +
+    scale_y_reverse() +
+    theme_void(base_size = 5) +
+    theme(strip.text.x = element_blank()) +
+    guides(fill = "none") +
+    coord_equal() +
+  ggtitle(paste("Cluster",i))
+  plot_list2[[i]] <- plotsabc2
+}
+
+
+grid_plot2 <- gridExtra::grid.arrange(grobs = plot_list2, ncol = 3)
+
+
+
+
+```
+
+# Explanation of the clusters -
+
+- Cluster 1 : 
+Cluster 1 has a mixture of two types of C's. The first one are the Upper case ones 
+which generally has thin body and stroke. The lower case c's have thicker stroke
+but most of them are straight with some of them having a longer upper part. Also,
+I notice that in cluster 1, **both ends of the letter c are quite far apart.**
+
+- Cluster 2 :
+Cluster 2 mostly comprises of *upper case C*. The C's in cluster two have a 
+**longer upper part with the end of upper part having a line coming down**.
+The **upper case c also have very thin body.** The lower case c in cluster 2 
+**also have a line coming down from the upper part of the letter.**. Due to the 
+line, the difference between the two ends of the c's is lesser.
+
+- Cluster 3 :
+Cluster 3 majorly comprises of *lower case c's.* Some of the C's in this cluster 
+are **rotated in anticlockwise direction.** Almost all of the c's in this cluster 
+have a **longer lower stroke and have a thick center part.** 
+
+
+
+# Approach
+
+I firstly divide our original data in training and test set. I already have the 
+clusters from the kmeans. The proportion of training and testing data is 7/10.
+
+Now, I did the PCA on the training data and fit a model using the PCs obtained. 
+Then I multiply the transformation i.e. the rotation matrix from our training data
+to our testing data. This is done so that we use only the information from our training 
+set and not our testing set. If we directly did PCA on our training data, we are 
+hampering the information. 
+I take first 75 PC's because they explain almost 95% of our data. 
+
+Then, I fit our ML models like, *knn, random-forest, xgboost, decision trees.*
+I then test these models and found out the accuracy of different models. 
+Then I fit the best model on whole of our original data and perform the similar 
+operations(multiplying the rotation matrix to our test data) on the 
+**new records data(data_new)**. Then I find the predictions for the test set.
+
+
+
+```{r, class.source = 'fold-hide'}
+
+
+set.seed(32877692)
+
+data_split <- initial_split(data3, prop = 0.7)
+
+data_train <- training(data_split)
+data_test <- testing(data_split)
+
+
+data_train_pca <- prcomp(data_train %>% select(-cluster_number))
+
+
+cluster_train <- (data_train$cluster_number)
+cluster_test <- (data_test$cluster_number)
+
+
+new_x <- as.data.frame(cbind(data_train_pca$x[,1:75],cluster_train)) %>%  
+  mutate(cluster_train = as.factor(cluster_train))
+                                                                  
+
+
+
+transformed <-   as.matrix((data_test %>% select(-cluster_number))) %*% data_train_pca$rotation
+
+
+transformed2 <- as.data.frame(cbind(transformed[,1:75],cluster_test)) %>% 
+  mutate(cluster_test = as.factor(cluster_test))
+
+
+
+```
+
+
+```{r, class.source = 'fold-hide'}
+#rpart
+set.seed(32877692)
+fit1 <- rpart(cluster_train~., data = new_x, method = "class")
+
+pred_rp_data <- transformed2 %>%
+  mutate(pred_clust = predict(fit1, newdata = ., type = "class"))
+
+
+```
+
+
+```{r, class.source = 'fold-hide'}
+#knn 
+set.seed(32877692)
+knn <- kknn(cluster_train ~ ., 
+                 train = new_x,
+                 test = transformed2,
+                 k = 2 ,
+                 distance = 2)
+
+pred_knn_data  <- transformed2 %>% 
+  mutate(pred_clust = knn$fitted.values)
+
+
+
+```
+
+
+
+
+```{r, class.source = 'fold-hide'}
+#ranger 
+set.seed(32877692)
+class_rf <- ranger(cluster_train ~ ., 
+                   data = new_x,
+                   mtry = floor((ncol(new_x) - 1) / 3),
+                   importance = "impurity",
+                   num.trees = 500,
+                   classification = TRUE)
+
+
+
+ranger_pred_data <- transformed2 %>%
+  mutate(pred_clust = predict(class_rf, transformed2)$predictions)
+
+
+
+```
+
+
+
+```{r, class.source = 'fold-hide'}
+#xgboost
+
+set.seed(32877692)
+class_xgb <- xgboost(data = model.matrix(~ . - cluster_train, data = new_x)[, -1],
+                     label = new_x$cluster_train,
+                     max.depth = 2,
+                     eta = 1,
+                     nrounds = 10,
+                     objective = "multi:softmax",
+                     num_class = 4,
+                     verbose = 0)
+
+
+xgb_pred_data = transformed2 %>% 
+mutate(pred_clust = predict(class_xgb, model.matrix(~ . - cluster_test, data = .)[, -1])) %>% 
+  mutate(pred_clust = as.factor(pred_clust))
+```
+
+
+
+```{r, class.source = 'fold-hide'}
+set.seed(32877692)
+
+a <-metrics(pred_rp_data, cluster_test,pred_clust)
+b <-metrics(pred_knn_data, cluster_test,pred_clust)
+c <- metrics(ranger_pred_data, cluster_test,pred_clust)
+d <- metrics(xgb_pred_data, cluster_test,pred_clust)
+
+
+final <-tibble(
+Model_name = c("Rpart","Knn","Random Forest","XgBoost"),
+Accuracy = c(a$.estimate[1],b$.estimate[1],c$.estimate[1],d$.estimate[1]),
+Kappa = c(a$.estimate[2],b$.estimate[2],c$.estimate[2],d$.estimate[2])
+)
+final
+
+
+```
+
+Random forest has the highest accuracy but xgboost is very close so I test both 
+and then classify which is the best model.
+
+
+
+```{r, class.source = 'fold-hide'}
+
+set.seed(32877692)
+
+train_final <- as.data.frame(cbind(data_pca$x[,1:75],cluster_number)) %>% 
+  mutate(cluster_number = as.factor(cluster_number))
+
+rota_main <- (data_pca$rotation)
+
+test_x <- as.data.frame(as.matrix(data_new) %*% rota_main)
+
+test_x_final <- test_x[1:75]
+
+
+
+# random forest
+
+class_rf2 <- ranger(cluster_number ~ ., 
+                   data = train_final,
+                   mtry = floor((ncol(new_x) - 1) / 3),
+                   importance = "impurity",
+                   num.trees = 500,
+                   classification = TRUE)
+
+
+
+ranger_pred_data2 <- test_x_final %>%
+  mutate(pred_clust = predict(class_rf2, test_x_final)$predictions)
+ranger_pred_data2$pred_clust
+
+
+# xgboost 
+
+class_xgb_final <- xgboost(data = model.matrix(~ . - cluster_number, data = train_final)[, -1],
+                     label = train_final$cluster_number,
+                     max.depth = 2,
+                     eta = 1,
+                     nrounds = 10,
+                     objective = "multi:softmax",
+                     num_class = 4,
+                     verbose = 0)
+
+
+xgb_pred_data2 = test_x_final %>% 
+mutate(pred_clust = predict(class_xgb_final, model.matrix(~ . , data = .)[, -1])) 
+xgb_pred_data2$pred_clust
+
+
+
+
+```
+
+Following are the images that are available in our new records data.
+
+```{r,class.source = 'fold-hide'}
+imagedata_to_plotdata <- function(data = data_new, 
+                                  w = 28, 
+                                  h = 28)
+  
+  {
+   data %>% 
+    mutate(id = 1:n()) %>% 
+    pivot_longer(starts_with("V")) %>% 
+    mutate(col = rep(rep(1:w, each = h), n_distinct(id)),
+           row = rep(rep(1:h, times = w), n_distinct(id)))
+}
+
+gfaces_qw <- imagedata_to_plotdata(data_new) %>% 
+    ggplot(aes(col, row)) +
+    geom_tile(aes(fill = value)) + 
+    facet_wrap(~id) +
+    scale_y_reverse() +
+    theme_void(base_size = 18) +
+    guides(fill = "none") +
+    coord_equal()
+
+gfaces_qw
+```
+
+On running both the models on the test data, we find that the predictions made 
+by both the models are same.
+
+- Image 1: The C looks like a uppercase C with a line coming down from the upper 
+part of the letter - *Cluster 2*
+
+- Image 2: The c looks like a lower case one and is rotated in anticlockwise 
+direction - *Cluster 3*
+
+- Image 3: The c is a lower case one with anticlockwise rotation and thick stroke
+and body - *Cluster 3*
+
+- Image 4: The image appears to be a lower case c with a slightly longer lower part
+and a slight left/anticlockwise tilt - *Cluster 3*
+
+- Image 5: The image looks like a upper case c with thin strokes and the distance 
+between the upper and lower ends is very less. - *Cluster 2*
+
+
+
+
+# Refferences 
+
+- ETC 5250 (Introduction to Machine Learning) lecture slides.
+- https://ggplot2.tidyverse.org/articles/faq-faceting.html#:~:text=Set%20the%20strip.,will%20remove%20all%20facet%20labels.
+- https://stackoverflow.com/questions/10706753/how-do-i-arrange-a-variable-list-of-plots-using-grid-arrange
+
+
+# Conclusion
+
+On testing both the models with the highest accuracy, I found out that both the 
+models give similar results, but I will prefer the Ranger approach (model name:
+class_rf2) as it has a bit higher accuracy.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
